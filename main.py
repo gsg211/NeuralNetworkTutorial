@@ -1,4 +1,3 @@
-import nnfs
 import numpy as np
 
 from nnfs.datasets import vertical_data
@@ -110,6 +109,46 @@ class ActivationSoftmaxLossCategoricalEntropy:
         self.dinputs = self.dinputs / samples
 
 
+class OptimiserSGD:
+    def __init__(self, learningRate=1, decay=0., momentum=0.):
+        self.learningRate = learningRate
+        self.currentLearningRate = learningRate
+        self.decay = decay
+        self.iterations = 0
+        self.momentum = momentum
+
+    def pre_update_params(self):
+        if self.decay:
+            self.currentLearningRate = self.learningRate * (1. / (1. + self.decay * self.iterations))
+
+    def update_params(self, layer):
+        if self.momentum:
+            # If layer does not contain momentum arrays, create them
+            # filled with zeros
+            if not hasattr(layer, 'weightMomentums'):
+                layer.weightMomentums = np.zeros_like(layer.dweights)
+                layer.biasMomentums = np.zeros_like(layer.dbiases)
+
+            # Build weight updates with momentum - take previous
+            # updates multiplied by retain factor and update with
+            # current gradients
+            weightUpdates = self.momentum * layer.weightMomentums - self.currentLearningRate * layer.dweights
+            layer.weightMomentums = weightUpdates
+            # Build bias updates
+
+            biasUpdates = self.momentum * layer.biasMomentums - self.currentLearningRate * layer.dbiases
+            layer.biasMomentums = biasUpdates
+        else:
+            weightUpdates = - self.currentLearningRate * layer.dweights
+            biasUpdates = - self.currentLearningRate * layer.dbiases
+
+        layer.weights += weightUpdates
+        layer.biases += biasUpdates
+
+    def post_update_params(self):
+        self.iterations += 1
+
+
 if __name__ == '__main__':
     x, y = vertical_data(samples=100, classes=3)
 
@@ -119,29 +158,30 @@ if __name__ == '__main__':
     dense2 = LayerDense(3, 3)
 
     lossActivation = ActivationSoftmaxLossCategoricalEntropy()
+    optimiser = OptimiserSGD(decay=1e-3, momentum=0.9)
 
-    dense1.forward(x)
-    activation1.forward(dense1.output)
-    dense2.forward(activation1.output)
+    for i in range(10001):
+        dense1.forward(x)
+        activation1.forward(dense1.output)
+        dense2.forward(activation1.output)
 
-    loss = lossActivation.forward(dense2.output, y)
-    print(lossActivation.output[: 5])
-    print('loss:', loss)
+        loss = lossActivation.forward(dense2.output, y)
 
-    predictions = np.argmax(lossActivation.output, axis=1)
-    if len(y.shape) == 2:
-        y = np.argmax(y, axis=1)
-    accuracy = np.mean(predictions == y)
-    print("acc: ", accuracy)
+        predictions = np.argmax(lossActivation.output, axis=1)
+        if len(y.shape) == 2:
+            y = np.argmax(y, axis=1)
+        accuracy = np.mean(predictions == y)
 
-    # backward pass
-    lossActivation.backward(lossActivation.output, y)
-    dense2.backward(lossActivation.dinputs)
-    activation1.backward(dense2.dinputs)
-    dense1.backward(activation1.dinputs)
+        if not i % 100:
+            print(f'epoch: {i} , ' + f'acc: {accuracy:.3f} , ' + f'loss: {loss:.3f} ' + f'lr: {optimiser.currentLearningRate:2f}')
 
-    # Print gradients
-    print(dense1.dweights)
-    print(dense1.dbiases)
-    print(dense2.dweights)
-    print(dense2.dbiases)
+        # backward pass
+        lossActivation.backward(lossActivation.output, y)
+        dense2.backward(lossActivation.dinputs)
+        activation1.backward(dense2.dinputs)
+        dense1.backward(activation1.dinputs)
+
+        optimiser.pre_update_params()
+        optimiser.update_params(dense1)
+        optimiser.update_params(dense2)
+        optimiser.post_update_params()
