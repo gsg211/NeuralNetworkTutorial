@@ -1,3 +1,4 @@
+import nnfs
 import numpy as np
 
 from nnfs.datasets import vertical_data
@@ -126,18 +127,18 @@ class OptimiserSGD:
             # If layer does not contain momentum arrays, create them
             # filled with zeros
             if not hasattr(layer, 'weightMomentums'):
-                layer.weightMomentums = np.zeros_like(layer.dweights)
-                layer.biasMomentums = np.zeros_like(layer.dbiases)
+                layer.weightCache = np.zeros_like(layer.dweights)
+                layer.biasCache = np.zeros_like(layer.dbiases)
 
             # Build weight updates with momentum - take previous
             # updates multiplied by retain factor and update with
             # current gradients
-            weightUpdates = self.momentum * layer.weightMomentums - self.currentLearningRate * layer.dweights
-            layer.weightMomentums = weightUpdates
+            weightUpdates = self.momentum * layer.weightCache - self.currentLearningRate * layer.dweights
+            layer.weightCache = weightUpdates
             # Build bias updates
 
-            biasUpdates = self.momentum * layer.biasMomentums - self.currentLearningRate * layer.dbiases
-            layer.biasMomentums = biasUpdates
+            biasUpdates = self.momentum * layer.biasCache - self.currentLearningRate * layer.dbiases
+            layer.biasCache = biasUpdates
         else:
             weightUpdates = - self.currentLearningRate * layer.dweights
             biasUpdates = - self.currentLearningRate * layer.dbiases
@@ -149,16 +150,119 @@ class OptimiserSGD:
         self.iterations += 1
 
 
+class OptimiserAdagrad:
+    def __init__(self, learningRate=1, decay=0., epsilon=1e-7):
+        self.learningRate = learningRate
+        self.currentLearningRate = learningRate
+        self.decay = decay
+        self.iterations = 0
+        self.epsilon = epsilon
+
+    def pre_update_params(self):
+        if self.decay:
+            self.currentLearningRate = self.learningRate * (1. / (1. + self.decay * self.iterations))
+
+    def update_params(self, layer):
+        if not hasattr(layer, 'weightCache'):
+            layer.weightCache = np.zeros_like(layer.weights)
+            layer.biasCache = np.zeros_like(layer.biases)
+
+        layer.weightCache += layer.dweights ** 2
+        layer.biasCache += layer.dbiases ** 2
+
+        layer.weights += -self.currentLearningRate * layer.dweights / (np.sqrt(layer.weightCache) + self.epsilon)
+        layer.biases += -self.currentLearningRate * layer.dbiases / (np.sqrt(layer.biasCache) + self.epsilon)
+
+    def post_update_params(self):
+        self.iterations += 1
+
+
+class OptimiserRMSprop:
+    def __init__(self, learningRate=0.001, decay=0., epsilon=1e-7, rho=0.9):
+        self.learningRate = learningRate
+        self.currentLearningRate = learningRate
+        self.decay = decay
+        self.iterations = 0
+        self.epsilon = epsilon
+        self.rho = rho
+
+    def pre_update_params(self):
+        if self.decay:
+            self.currentLearningRate = self.learningRate * (1. / (1. + self.decay * self.iterations))
+
+    def update_params(self, layer):
+        if not hasattr(layer, 'weightCache'):
+            layer.weightCache = np.zeros_like(layer.weights)
+            layer.biasCache = np.zeros_like(layer.biases)
+
+        layer.weightCache = self.rho * layer.weightCache + (1 - self.rho) * layer.dweights ** 2
+        layer.biasCache = self.rho * layer.biasCache + (1 - self.rho) * layer.dbiases ** 2
+
+        layer.weights += -self.currentLearningRate * layer.dweights / (np.sqrt(layer.weightCache) + self.epsilon)
+        layer.biases += -self.currentLearningRate * layer.dbiases / (np.sqrt(layer.biasCache) + self.epsilon)
+
+    def post_update_params(self):
+        self.iterations += 1
+
+
+class OptimiserAdam:
+    def __init__(self, learningRate=0.001, decay=0., epsilon=1e-7, beta1=0.9, beta2=0.999):
+        self.learningRate = learningRate
+        self.currentLearningRate = learningRate
+        self.decay = decay
+        self.iterations = 0
+        self.epsilon = epsilon
+        self.beta1 = beta1
+        self.beta2 = beta2
+
+    def pre_update_params(self):
+        if self.decay:
+            self.currentLearningRate = self.learningRate * (1. / (1. + self.decay * self.iterations))
+
+    def update_params(self, layer):
+        # Initialize moment and cache vectors if not already done
+        if not hasattr(layer, 'weightMomentums'):
+            layer.weightMomentums = np.zeros_like(layer.weights)
+            layer.weightCache = np.zeros_like(layer.weights)
+            layer.biasMomentums = np.zeros_like(layer.biases)
+            layer.biasCache = np.zeros_like(layer.biases)
+
+        # Update moment vectors with current gradients
+        layer.weightMomentums = self.beta1 * layer.weightMomentums + (1 - self.beta1) * layer.dweights
+        layer.biasMomentums = self.beta1 * layer.biasMomentums + (1 - self.beta1) * layer.dbiases
+
+        # Compute bias-corrected moment estimates
+        weightMomentumsCorrected = layer.weightMomentums / (1 - self.beta1 ** (self.iterations + 1))
+        biasMomentumsCorrected = layer.biasMomentums / (1 - self.beta1 ** (self.iterations + 1))
+
+        # Update cache with squared current gradients
+        layer.weightCache = self.beta2 * layer.weightCache + (1 - self.beta2) * layer.dweights ** 2
+        layer.biasCache = self.beta2 * layer.biasCache + (1 - self.beta2) * layer.dbiases ** 2
+
+        # Compute bias-corrected cache estimates
+        weightCacheCorrected = layer.weightCache / (1 - self.beta2 ** (self.iterations + 1))
+        biasCacheCorrected = layer.biasCache / (1 - self.beta2 ** (self.iterations + 1))
+
+        # Update parameters
+        layer.weights += (-self.currentLearningRate * weightMomentumsCorrected /
+                          (np.sqrt(weightCacheCorrected) + self.epsilon))
+        layer.biases += (-self.currentLearningRate * biasMomentumsCorrected /
+                         (np.sqrt(biasCacheCorrected) + self.epsilon))
+
+    def post_update_params(self):
+        self.iterations += 1
+
+
 if __name__ == '__main__':
     x, y = vertical_data(samples=100, classes=3)
 
-    dense1 = LayerDense(2, 3)
+    dense1 = LayerDense(2, 64)
     activation1 = ActivationRelu()
 
-    dense2 = LayerDense(3, 3)
+    dense2 = LayerDense(64, 3)
 
     lossActivation = ActivationSoftmaxLossCategoricalEntropy()
-    optimiser = OptimiserSGD(decay=1e-3, momentum=0.9)
+    optimiser = OptimiserAdam(learningRate=0.05, decay=1e-5)
 
     for i in range(10001):
         dense1.forward(x)
@@ -173,7 +277,8 @@ if __name__ == '__main__':
         accuracy = np.mean(predictions == y)
 
         if not i % 100:
-            print(f'epoch: {i} , ' + f'acc: {accuracy:.3f} , ' + f'loss: {loss:.3f} ' + f'lr: {optimiser.currentLearningRate:2f}')
+            print(
+                f'epoch: {i} , ' + f'acc: {accuracy:.3f} , ' + f'loss: {loss:.3f} ' + f'lr: {optimiser.currentLearningRate:2f}')
 
         # backward pass
         lossActivation.backward(lossActivation.output, y)
